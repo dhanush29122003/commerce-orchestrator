@@ -32,7 +32,7 @@ public class OrderProcessingService {
 
         try {
             processingOrder = transactionTemplate.execute(status -> {
-                Order order = findOrder(id);
+                Order order = findOrderForUpdate(id);
                 order.startProcessing();
                 return orderRepository.save(order);
             });
@@ -55,7 +55,7 @@ public class OrderProcessingService {
             paymentService.processPayment(1);
 
             Order completedOrder = transactionTemplate.execute(status -> {
-                Order order = findOrder(id);
+                Order order = findOrderForUpdate(id);
                 order.complete();
                 return orderRepository.save(order);
             });
@@ -71,7 +71,7 @@ public class OrderProcessingService {
         } catch (PaymentService.TemporaryPaymentException exception) {
             // Persist FAILED in a separate transaction before returning 503.
             transactionTemplate.executeWithoutResult(status -> {
-                Order order = findOrder(id);
+                Order order = findOrderForUpdate(id);
                 order.fail();
                 orderRepository.save(order);
             });
@@ -125,6 +125,14 @@ public class OrderProcessingService {
 
     private Order findOrder(Long id) {
         return orderRepository.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Order not found with id: " + id
+                ));
+    }
+
+    private Order findOrderForUpdate(Long id) {
+        return orderRepository.findByIdForUpdate(id)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND,
                         "Order not found with id: " + id

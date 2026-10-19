@@ -13,10 +13,18 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.times;
 
 @SpringBootTest
 @ActiveProfiles("test")
@@ -80,7 +88,6 @@ class OrderProcessingIntegrationTests {
                 exception.getStatusCode()
         );
 
-        // Reload from MySQL after the service has returned its error.
         Order persistedOrder = orderRepository.findById(orderId)
                 .orElseThrow();
 
@@ -91,5 +98,102 @@ class OrderProcessingIntegrationTests {
         );
 
         verify(paymentService).processPayment(1);
+    }
+
+    @Test
+    void concurrentProcessingRequestsAttemptPaymentOnlyOnce()
+            throws Exception {
+
+        Order order = orderRepository.saveAndFlush(
+                new Order("Concurrent Test Laptop", 1)
+        );
+
+        Long orderId = order.getId();
+
+        CountDownLatch paymentStarted = new CountDownLatch(1);
+        CountDownLatch allowPaymentToFinish = new CountDownLatch(1);
+
+        doAnswer(invocation -> {
+            paymentStarted.countDown();
+
+            boolean released = allowPaymentToFinish.await(
+                    10,
+                    TimeUnit.SECONDS
+            );
+
+            if (!released) {
+                throw new IllegalStateException(
+                        "Timed out waiting for test to release payment"
+                );
+            }
+
+            return "Payment successful";
+        }).when(paymentService).processPayment(1);
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        try {
+            // Start the first request and pause it during payment.
+            Future<Order> firstRequest = executor.submit(
+                    () -> orderProcessingService.processOrder(orderId)
+            );
+
+            boolean paymentReached = paymentStarted.await(
+                    5,
+                    TimeUnit.SECONDS
+            );
+
+            assertEquals(
+                    true,
+                    paymentReached,
+                    "The first request should reach payment processing"
+            );
+
+            // While the first payment is paused, submit a duplicate request.
+            Future<HttpStatus> secondRequest = executor.submit(() -> {
+                ResponseStatusException exception = assertThrows(
+                        ResponseStatusException.class,
+                        () -> orderProcessingService.processOrder(orderId)
+                );
+
+                return HttpStatus.valueOf(exception.getStatusCode().value());
+            });
+
+            HttpStatus secondStatus = secondRequest.get(
+                    5,
+                    TimeUnit.SECONDS
+            );
+
+            assertEquals(HttpStatus.CONFLICT, secondStatus);
+
+            // Allow the first request to finish successfully.
+            allowPaymentToFinish.countDown();
+
+            Order completedOrder = firstRequest.get(
+                    5,
+                    TimeUnit.SECONDS
+            );
+
+            assertEquals(
+                    OrderStatus.COMPLETED,
+                    completedOrder.getStatus()
+            );
+
+            Order persistedOrder = orderRepository.findById(orderId)
+                    .orElseThrow();
+
+            assertEquals(
+                    OrderStatus.COMPLETED,
+                    persistedOrder.getStatus()
+            );
+
+            // Both requests shared the same mocked payment service.
+            verify(paymentService, times(1)).processPayment(1);
+
+        } finally {
+            // Avoid leaving the first request blocked if an assertion fails.
+            allowPaymentToFinish.countDown();
+            executor.shutdownNow();
+        }
     }
 }

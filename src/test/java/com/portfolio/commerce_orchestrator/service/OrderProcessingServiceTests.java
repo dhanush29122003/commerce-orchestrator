@@ -21,8 +21,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class OrderProcessingServiceTests {
@@ -70,7 +70,7 @@ class OrderProcessingServiceTests {
     void processOrderCompletesWhenPaymentSucceeds() {
         Order order = new Order("Laptop", 1);
 
-        when(orderRepository.findById(1L))
+        when(orderRepository.findByIdForUpdate(1L))
                 .thenReturn(Optional.of(order));
 
         when(orderRepository.save(any(Order.class)))
@@ -79,6 +79,7 @@ class OrderProcessingServiceTests {
         Order result = orderProcessingService.processOrder(1L);
 
         assertEquals(OrderStatus.COMPLETED, result.getStatus());
+
         verify(paymentService).processPayment(1);
         verify(orderRepository, times(2)).save(order);
     }
@@ -87,7 +88,7 @@ class OrderProcessingServiceTests {
     void processOrderMarksOrderFailedWhenPaymentRetriesAreExhausted() {
         Order order = new Order("Laptop", 1);
 
-        when(orderRepository.findById(1L))
+        when(orderRepository.findByIdForUpdate(1L))
                 .thenReturn(Optional.of(order));
 
         when(orderRepository.save(any(Order.class)))
@@ -112,7 +113,6 @@ class OrderProcessingServiceTests {
 
         assertEquals(OrderStatus.FAILED, order.getStatus());
 
-        // First save: PROCESSING. Second save: FAILED.
         verify(orderRepository, times(2)).save(order);
     }
 
@@ -122,7 +122,7 @@ class OrderProcessingServiceTests {
         order.startProcessing();
         order.complete();
 
-        when(orderRepository.findById(1L))
+        when(orderRepository.findByIdForUpdate(1L))
                 .thenReturn(Optional.of(order));
 
         ResponseStatusException exception = assertThrows(
