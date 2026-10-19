@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class PaymentServiceTests {
 
     private final PaymentService paymentService =
-            new PaymentService(new RetryService());
+            new PaymentService(new RetryService(3, 500));
 
     @Test
     void shouldSucceedAfterOneTemporaryPaymentFailure() {

@@ -10,7 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class RetryServiceTests {
 
-    private final RetryService retryService = new RetryService();
+    private final RetryService retryService = new RetryService(3, 500);
 
     @Test
     void shouldRetryAndSucceedOnSecondAttempt() {
