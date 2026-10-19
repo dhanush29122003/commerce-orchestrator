@@ -9,6 +9,7 @@ import java.util.function.Supplier;
 public class RetryService {
 
     private static final int MAX_ATTEMPTS = 3;
+    private static final long INITIAL_DELAY_MS = 500;
 
     public <T> T executeWithRetry(
             Supplier<T> operation,
@@ -23,6 +24,19 @@ public class RetryService {
 
                 if (!isRetryable || attempt == MAX_ATTEMPTS) {
                     throw exception;
+                }
+
+                long delay = INITIAL_DELAY_MS * (1L << (attempt - 1));
+
+                try {
+                    Thread.sleep(delay);
+                } catch (InterruptedException interruptedException) {
+                    Thread.currentThread().interrupt();
+
+                    throw new IllegalStateException(
+                            "Retry interrupted",
+                            interruptedException
+                    );
                 }
             }
         }
