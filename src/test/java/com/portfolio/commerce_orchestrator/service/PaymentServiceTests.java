@@ -1,6 +1,7 @@
 
 package com.portfolio.commerce_orchestrator.service;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -9,7 +10,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class PaymentServiceTests {
 
     private final PaymentService paymentService =
-            new PaymentService(new RetryService(3, 500));
+            new PaymentService(
+                    new RetryService(3, 0, new SimpleMeterRegistry())
+            );
 
     @Test
     void shouldSucceedAfterOneTemporaryPaymentFailure() {

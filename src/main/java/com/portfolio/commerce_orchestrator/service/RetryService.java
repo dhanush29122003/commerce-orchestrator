@@ -1,6 +1,9 @@
 
 package com.portfolio.commerce_orchestrator.service;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Counter;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -17,9 +20,14 @@ public class RetryService {
     private final int maxAttempts;
     private final long initialDelayMs;
 
+    private final Counter retryAttemptsCounter;
+    private final Counter successAfterRetryCounter;
+    private final Counter exhaustedRetriesCounter;
+
     public RetryService(
             @Value("${app.retry.max-attempts:3}") int maxAttempts,
-            @Value("${app.retry.initial-delay-ms:500}") long initialDelayMs
+            @Value("${app.retry.initial-delay-ms:500}") long initialDelayMs,
+            MeterRegistry meterRegistry
     ) {
         if (maxAttempts < 1) {
             throw new IllegalArgumentException(
@@ -35,6 +43,18 @@ public class RetryService {
 
         this.maxAttempts = maxAttempts;
         this.initialDelayMs = initialDelayMs;
+
+        this.retryAttemptsCounter = meterRegistry.counter(
+                "commerce.retry.attempts"
+        );
+
+        this.successAfterRetryCounter = meterRegistry.counter(
+                "commerce.retry.success.after.retry"
+        );
+
+        this.exhaustedRetriesCounter = meterRegistry.counter(
+                "commerce.retry.exhausted"
+        );
     }
 
     public <T> T executeWithRetry(
@@ -46,6 +66,8 @@ public class RetryService {
                 T result = operation.get();
 
                 if (attempt > 1) {
+                    successAfterRetryCounter.increment();
+
                     logger.info(
                             "Operation succeeded on attempt {}/{}",
                             attempt,
@@ -71,6 +93,8 @@ public class RetryService {
                 }
 
                 if (attempt == maxAttempts) {
+                    exhaustedRetriesCounter.increment();
+
                     logger.error(
                             "Operation failed after exhausting {} attempts",
                             maxAttempts,
@@ -79,6 +103,8 @@ public class RetryService {
 
                     throw exception;
                 }
+
+                retryAttemptsCounter.increment();
 
                 long delay = initialDelayMs * (1L << (attempt - 1));
 
