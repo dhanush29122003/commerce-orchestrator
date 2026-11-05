@@ -50,10 +50,16 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- Health endpoint -->
+        <!-- Spring Boot Actuator and metrics -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <!-- Apache Kafka integration -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-kafka</artifactId>
         </dependency>
 
         <!-- JSON serialization for Spring Boot 4 / Jackson 3 -->

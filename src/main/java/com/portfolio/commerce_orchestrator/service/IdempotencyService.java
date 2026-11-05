@@ -1,10 +1,13 @@
 
 package com.portfolio.commerce_orchestrator.service;
 
+import com.portfolio.commerce_orchestrator.events.OrderCreatedEvent;
 import com.portfolio.commerce_orchestrator.idempotency.IdempotencyRecord;
 import com.portfolio.commerce_orchestrator.idempotency.IdempotencyRepository;
 import com.portfolio.commerce_orchestrator.order.Order;
 import com.portfolio.commerce_orchestrator.order.OrderRepository;
+import com.portfolio.commerce_orchestrator.outbox.OutboxEvent;
+import com.portfolio.commerce_orchestrator.outbox.OutboxEventRepository;
 
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
@@ -20,6 +23,7 @@ import org.springframework.web.server.ResponseStatusException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.format.DateTimeFormatter;
 import java.util.HexFormat;
 
 @Service
@@ -27,17 +31,20 @@ public class IdempotencyService {
 
     private final IdempotencyRepository idempotencyRepository;
     private final OrderRepository orderRepository;
+    private final OutboxEventRepository outboxEventRepository;
     private final ObjectMapper objectMapper;
     private final TransactionTemplate transactionTemplate;
 
     public IdempotencyService(
             IdempotencyRepository idempotencyRepository,
             OrderRepository orderRepository,
+            OutboxEventRepository outboxEventRepository,
             ObjectMapper objectMapper,
             PlatformTransactionManager transactionManager) {
 
         this.idempotencyRepository = idempotencyRepository;
         this.orderRepository = orderRepository;
+        this.outboxEventRepository = outboxEventRepository;
         this.objectMapper = objectMapper;
 
         this.transactionTemplate =
@@ -56,12 +63,12 @@ public class IdempotencyService {
         String fingerprint = createFingerprint(productName, quantity);
 
         try {
-            return transactionTemplate.execute(status -> {
+            CreateOrderResult result = transactionTemplate.execute(status -> {
 
                 var existing =
                         idempotencyRepository.findByIdempotencyKey(key);
 
-                // 1. If the key already exists, handle the retry.
+                // Return the original order for an idempotent replay.
                 if (existing.isPresent()) {
                     IdempotencyRecord record = existing.get();
 
@@ -70,19 +77,20 @@ public class IdempotencyService {
                             fingerprint
                     );
 
-                    return deserializeOrder(record.getResponseBody());
+                    return new CreateOrderResult(
+                            deserializeOrder(record.getResponseBody()),
+                            false
+                    );
                 }
 
-                // 2. Create the order inside the transaction.
+                // 1. Save the new order.
                 Order order = orderRepository.save(
                         new Order(productName, quantity)
                 );
 
-                // 3. Serialize the response before saving the key.
+                // 2. Save the idempotency record.
                 String responseBody = serializeOrder(order);
 
-                // 4. Save the idempotency record.
-                // A unique-key conflict is handled outside the transaction.
                 try {
                     idempotencyRepository.saveAndFlush(
                             new IdempotencyRecord(
@@ -95,18 +103,49 @@ public class IdempotencyService {
                     throw new IdempotencyRecordInsertException(exception);
                 }
 
-                return order;
+                // 3. Create the order-created event.
+                OrderCreatedEvent event = new OrderCreatedEvent(
+                        order.getId(),
+                        order.getProductName(),
+                        order.getQuantity(),
+                        order.getStatus().name(),
+                        order.getCreatedAt().format(
+                                DateTimeFormatter.ISO_LOCAL_DATE_TIME
+                        )
+                );
+
+                // 4. Serialize the event.
+                String eventPayload = serializeEvent(event);
+
+                // 5. Save the event in the outbox table.
+                OutboxEvent outboxEvent = new OutboxEvent(
+                        "ORDER_CREATED",
+                        "ORDER",
+                        order.getId().toString(),
+                        eventPayload
+                );
+
+                outboxEventRepository.save(outboxEvent);
+
+                return new CreateOrderResult(order, true);
             });
+
+            if (result == null) {
+                throw new IllegalStateException(
+                        "Order creation transaction returned no result."
+                );
+            }
+
+            return result.order();
 
         } catch (IdempotencyRecordInsertException exception) {
 
             DataIntegrityViolationException originalException =
                     (DataIntegrityViolationException) exception.getCause();
 
-            // The failed transaction has rolled back.
-            // Look for the record created by the competing request.
             try {
                 return readExistingOrder(key, fingerprint);
+
             } catch (ResponseStatusException lookupException) {
 
                 boolean recordWasNotFoundAfterConflict =
@@ -151,7 +190,6 @@ public class IdempotencyService {
             String savedFingerprint,
             String requestedFingerprint) {
 
-        // Protect against old records that do not have a fingerprint.
         if (savedFingerprint == null || savedFingerprint.isBlank()) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
@@ -159,7 +197,6 @@ public class IdempotencyService {
             );
         }
 
-        // The same key cannot be reused for a different request.
         if (!savedFingerprint.equals(requestedFingerprint)) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
@@ -174,6 +211,17 @@ public class IdempotencyService {
         } catch (JacksonException exception) {
             throw new IllegalStateException(
                     "Could not serialize the order response.",
+                    exception
+            );
+        }
+    }
+
+    private String serializeEvent(OrderCreatedEvent event) {
+        try {
+            return objectMapper.writeValueAsString(event);
+        } catch (JacksonException exception) {
+            throw new IllegalStateException(
+                    "Could not serialize the order-created event.",
                     exception
             );
         }
@@ -208,6 +256,9 @@ public class IdempotencyService {
                     exception
             );
         }
+    }
+
+    private record CreateOrderResult(Order order, boolean created) {
     }
 
     private static class IdempotencyRecordInsertException
