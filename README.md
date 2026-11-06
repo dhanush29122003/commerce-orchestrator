@@ -1,4 +1,7 @@
 # Fault-Tolerant Digital Commerce Orchestration Platform
+## System Architecture
+
+![Commerce Orchestrator Architecture](docs/commerce_orchestrator_architecture.png)
 
 A backend-focused, event-driven commerce platform built using Java 21, Spring Boot, MySQL, and Apache Kafka. The system demonstrates reliable order creation, idempotency, transactional event publishing, concurrency control, and retry handling.
 
